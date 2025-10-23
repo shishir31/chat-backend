@@ -1,10 +1,11 @@
 const express = require("express");
-const mongoose = require("mongoose");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
-const { MONGO_URI, PORT } = require("./config");
+const dotenv = require("dotenv");
+
+const { connectDB, PORT } = require("./config");
 
 // Import routes
 const authRoutes = require("./routes/auth");
@@ -12,61 +13,48 @@ const userRoutes = require("./routes/users");
 const chatRoutes = require("./routes/chats");
 const messageRoutes = require("./routes/messages");
 
-const app = express();
+dotenv.config();
+connectDB();
 
-// 🧩 Middleware
+const app = express();
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static(path.join(__dirname, "uploads"))); // serve uploaded files
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// 🧩 API Routes
+// API Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/messages", messageRoutes);
 
-// 🧩 MongoDB connection
-mongoose.connect(MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err.message));
-
-// 🧩 Create server + socket.io setup
+// Create HTTP server + socket.io
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" },
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 let onlineUsers = new Map();
 
 io.on("connection", (socket) => {
   console.log("🟢 User connected:", socket.id);
 
-  // Add user when they log in
+  // Track online users
   socket.on("addUser", (userId) => {
     onlineUsers.set(userId, socket.id);
     io.emit("getOnlineUsers", Array.from(onlineUsers.keys()));
   });
 
-  // Typing indicator
-  socket.on("typing", ({ chatId, senderId }) => {
-    socket.to(chatId).emit("typing", { chatId, senderId });
-  });
-
-  // Send message
-  socket.on("sendMessage", (data) => {
-    const { chatId, senderId, text, file } = data;
-    io.to(chatId).emit("receiveMessage", { chatId, senderId, text, file });
-  });
-
-  // Join specific chat room
+  // Join chat room
   socket.on("joinChat", (chatId) => {
     socket.join(chatId);
+    console.log(`Socket ${socket.id} joined chat ${chatId}`);
   });
 
-  // Handle disconnect
+  // Send message to all users in the room including sender
+  socket.on("sendMessage", (data) => {
+    const { chatId, senderId, text, file } = data;
+    io.to(chatId).emit("receiveMessage", { chatId, senderId, text, file: file || null });
+  });
+
+  // Disconnect
   socket.on("disconnect", () => {
     console.log("🔴 User disconnected:", socket.id);
     for (let [userId, sId] of onlineUsers.entries()) {
@@ -76,5 +64,4 @@ io.on("connection", (socket) => {
   });
 });
 
-// 🧩 Start the backend server
 server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
